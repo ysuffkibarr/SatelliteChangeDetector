@@ -3,8 +3,9 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, concatenate
-from tensorflow.keras.models import Model
+from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.utils import Sequence
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 import tensorflow.keras.backend as K
 import tensorflow as tf
 import albumentations as A
@@ -38,9 +39,7 @@ class DataGenerator(Sequence):
 
     def __getitem__(self, idx):
         batch_indexes = self.indexes[idx * self.batch_size : (idx + 1) * self.batch_size]
-        
-        X = []
-        y = []
+        X, y = [], []
 
         for index in batch_indexes:
             img_B = cv2.imread(os.path.join(self.folder_B, self.image_files[index]))
@@ -97,28 +96,33 @@ def test_with_own_images(path_img1, path_img2, model, img_size=(256,256)):
     img1 = cv2.imread(path_img1)
     img2 = cv2.imread(path_img2)
 
-    img1 = cv2.resize(img1, img_size) / 255.0
-    img2 = cv2.resize(img2, img_size) / 255.0
+    img1_resized = cv2.resize(img1, img_size) / 255.0
+    img2_resized = cv2.resize(img2, img_size) / 255.0
 
-    input_img = np.concatenate([img1, img2], axis=-1)
+    input_img = np.concatenate([img1_resized, img2_resized], axis=-1)
     input_img = np.expand_dims(input_img, 0)
 
     pred_mask = model.predict(input_img)[0, :, :, 0]
+    binary_mask = (pred_mask > 0.3).astype(np.uint8) * 255
+
+    save_path = "predicted_change.png"
+    cv2.imwrite(save_path, binary_mask)
+    print(f"\n[+] SUCCESS: Change mask saved locally as '{save_path}'")
 
     plt.figure(figsize=(12,4))
     plt.subplot(1,3,1)
     plt.title("Before Image")
-    plt.imshow(cv2.cvtColor((img1 * 255).astype(np.uint8), cv2.COLOR_BGR2RGB))
+    plt.imshow(cv2.cvtColor((img1_resized * 255).astype(np.uint8), cv2.COLOR_BGR2RGB))
     plt.axis('off')
 
     plt.subplot(1,3,2)
     plt.title("After Image")
-    plt.imshow(cv2.cvtColor((img2 * 255).astype(np.uint8), cv2.COLOR_BGR2RGB))
+    plt.imshow(cv2.cvtColor((img2_resized * 255).astype(np.uint8), cv2.COLOR_BGR2RGB))
     plt.axis('off')
 
     plt.subplot(1,3,3)
     plt.title("Predicted Change")
-    plt.imshow(pred_mask > 0.3, cmap='gray')
+    plt.imshow(binary_mask, cmap='gray')
     plt.axis('off')
 
     plt.tight_layout()
@@ -128,45 +132,43 @@ if __name__ == "__main__":
     train_folder = "dataset/train"
     val_folder = "dataset/val"
     test_folder = "dataset/test"
+    model_path = "best_model.h5"
 
-    print("Setting up AI Training Pipeline...")
-    
-    train_transform = A.Compose([
-        A.Resize(256, 256),
-        A.HorizontalFlip(p=0.5),
-        A.VerticalFlip(p=0.5),
-        A.RandomRotate90(p=0.5)
-    ], additional_targets={'image_after': 'image'})
+    if os.path.exists(model_path):
+        print(f"[{model_path}] found! Loading the trained brain...")
+        model = load_model(model_path, custom_objects={'combined_loss': combined_loss, 'dice_loss': dice_loss})
+    else:
+        print("No trained model found. Setting up AI Training Pipeline from scratch...")
+        
+        train_transform = A.Compose([
+            A.Resize(256, 256),
+            A.HorizontalFlip(p=0.5),
+            A.VerticalFlip(p=0.5),
+            A.RandomRotate90(p=0.5)
+        ], additional_targets={'image_after': 'image'})
 
-    val_transform = A.Compose([
-        A.Resize(256, 256)
-    ], additional_targets={'image_after': 'image'})
+        val_transform = A.Compose([
+            A.Resize(256, 256)
+        ], additional_targets={'image_after': 'image'})
 
-    print("Preparing data...")
-    train_data = DataGenerator(train_folder, batch_size=8, transform=train_transform)
-    val_data = DataGenerator(val_folder, batch_size=8, transform=val_transform, shuffle=False)
+        train_data = DataGenerator(train_folder, batch_size=8, transform=train_transform)
+        val_data = DataGenerator(val_folder, batch_size=8, transform=val_transform, shuffle=False)
 
-    print("Building model...")
-    model = create_unet()
+        model = create_unet()
 
-    print("Training model...")
-    model.fit(train_data, validation_data=val_data, epochs=20)
+        callbacks = [
+            ModelCheckpoint(model_path, monitor="val_loss", save_best_only=True, mode="min", verbose=1),
+            EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True, verbose=1)
+        ]
 
-    print("Selecting images for testing...")
-    try:
-        test_image_name = sorted(os.listdir(os.path.join(test_folder, "B")))[0]
-        test_img1 = os.path.join(test_folder, "B", test_image_name)
-        test_img2 = os.path.join(test_folder, "A", test_image_name)
-
-        print(f"Test images: {test_img1}, {test_img2}")
-        test_with_own_images(test_img1, test_img2, model)
-    except IndexError:
-        print("No image found in the test folder, continuing with data in the 'images/' folder.")
+        print("Training model...")
+        model.fit(train_data, validation_data=val_data, epochs=20, callbacks=callbacks)
+        print("Training complete! Brain saved.")
 
     my_img1 = "images/before.png"
     my_img2 = "images/after.png"
     if os.path.exists(my_img1) and os.path.exists(my_img2):
-        print("Testing custom images...")
+        print("\nTesting custom images...")
         test_with_own_images(my_img1, my_img2, model)
     else:
         print(f"Warning: {my_img1} or {my_img2} not found.")

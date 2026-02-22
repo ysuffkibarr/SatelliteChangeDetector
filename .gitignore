@@ -207,3 +207,6 @@ marimo/_lsp/
 __marimo__/
 
 dataset/
+
+*.h5
+predicted_change.png
