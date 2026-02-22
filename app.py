@@ -138,7 +138,6 @@ if __name__ == "__main__":
         A.RandomRotate90(p=0.5)
     ], additional_targets={'image_after': 'image'})
 
-
     val_transform = A.Compose([
         A.Resize(256, 256)
     ], additional_targets={'image_after': 'image'})
