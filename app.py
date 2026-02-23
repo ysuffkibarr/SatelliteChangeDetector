@@ -39,7 +39,9 @@ class DataGenerator(Sequence):
 
     def __getitem__(self, idx):
         batch_indexes = self.indexes[idx * self.batch_size : (idx + 1) * self.batch_size]
-        X, y = [], []
+        
+        X = []
+        y = []
 
         for index in batch_indexes:
             img_B = cv2.imread(os.path.join(self.folder_B, self.image_files[index]))
@@ -105,24 +107,36 @@ def test_with_own_images(path_img1, path_img2, model, img_size=(256,256)):
     pred_mask = model.predict(input_img)[0, :, :, 0]
     binary_mask = (pred_mask > 0.3).astype(np.uint8) * 255
 
-    save_path = "predicted_change.png"
-    cv2.imwrite(save_path, binary_mask)
-    print(f"\n[+] SUCCESS: Change mask saved locally as '{save_path}'")
+    kernel = np.ones((5,5), np.uint8)
+    
+    cleaned_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_OPEN, kernel)
 
-    plt.figure(figsize=(12,4))
-    plt.subplot(1,3,1)
+    cleaned_mask = cv2.morphologyEx(cleaned_mask, cv2.MORPH_CLOSE, kernel)
+
+    save_path = "predicted_change_cleaned.png"
+    cv2.imwrite(save_path, cleaned_mask)
+    print(f"\n[+] SUCCESS: Cleaned change mask saved locally as '{save_path}'")
+
+    plt.figure(figsize=(15,5))
+    
+    plt.subplot(1,4,1)
     plt.title("Before Image")
     plt.imshow(cv2.cvtColor((img1_resized * 255).astype(np.uint8), cv2.COLOR_BGR2RGB))
     plt.axis('off')
 
-    plt.subplot(1,3,2)
+    plt.subplot(1,4,2)
     plt.title("After Image")
     plt.imshow(cv2.cvtColor((img2_resized * 255).astype(np.uint8), cv2.COLOR_BGR2RGB))
     plt.axis('off')
 
-    plt.subplot(1,3,3)
-    plt.title("Predicted Change")
+    plt.subplot(1,4,3)
+    plt.title("Raw Prediction")
     plt.imshow(binary_mask, cmap='gray')
+    plt.axis('off')
+
+    plt.subplot(1,4,4)
+    plt.title("Cleaned Output")
+    plt.imshow(cleaned_mask, cmap='gray')
     plt.axis('off')
 
     plt.tight_layout()
@@ -134,6 +148,7 @@ if __name__ == "__main__":
     test_folder = "dataset/test"
     model_path = "best_model.h5"
 
+    print("Checking for pre-trained model...")
     if os.path.exists(model_path):
         print(f"[{model_path}] found! Loading the trained brain...")
         model = load_model(model_path, custom_objects={'combined_loss': combined_loss, 'dice_loss': dice_loss})
@@ -167,6 +182,7 @@ if __name__ == "__main__":
 
     my_img1 = "images/before.png"
     my_img2 = "images/after.png"
+    
     if os.path.exists(my_img1) and os.path.exists(my_img2):
         print("\nTesting custom images...")
         test_with_own_images(my_img1, my_img2, model)
