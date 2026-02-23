@@ -16,14 +16,14 @@ def combined_loss(y_true, y_pred):
     bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
     return bce + dice_loss(y_true, y_pred)
 
-print("Loading AI Engine...")
+print("Yapay Zeka Motoru Yükleniyor...")
 model_path = "best_model_resnet50.h5"
 if os.path.exists(model_path):
     model = load_model(model_path, custom_objects={'combined_loss': combined_loss, 'dice_loss': dice_loss})
-    print("Engine Ready!")
+    print("Motor Hazır!")
 else:
     model = None
-    print("WARNING: Model not found. Please run app.py first to train the model.")
+    print("UYARI: Model bulunamadı. Lütfen önce app.py dosyasını çalıştırarak modeli eğitin.")
 
 def predict_change(img_before, img_after):
     if model is None:
@@ -35,6 +35,7 @@ def predict_change(img_before, img_after):
     input_img = np.concatenate([img1_resized, img2_resized], axis=-1)
     input_img = np.expand_dims(input_img, 0)
 
+    # Tahmin
     pred_mask = model.predict(input_img)[0, :, :, 0]
     binary_mask = (pred_mask > 0.3).astype(np.uint8) * 255
 
@@ -47,10 +48,10 @@ def predict_change(img_before, img_after):
 interface = gr.Interface(
     fn=predict_change,
     inputs=[
-        gr.Image(label="Before Image"),
-        gr.Image(label="After Image")
+        gr.Image(label="Before Image (Önceki Uydu Görüntüsü)"),
+        gr.Image(label="After Image (Sonraki Uydu Görüntüsü)")
     ],
-    outputs=gr.Image(label="Detected Change"),
+    outputs=gr.Image(label="Detected Change (Tespit Edilen Değişim)"),
     title="🛰️ AI Satellite Change Detector",
     description="Upload two satellite images from different times to detect structural and environmental changes. Powered by Siamese ResNet50 U-Net architecture.",
     theme="default",
