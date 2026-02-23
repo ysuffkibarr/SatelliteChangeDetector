@@ -6,6 +6,7 @@ from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, c
 from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.utils import Sequence
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+from tensorflow.keras.applications import ResNet50
 import tensorflow.keras.backend as K
 import tensorflow as tf
 import albumentations as A
@@ -39,9 +40,7 @@ class DataGenerator(Sequence):
 
     def __getitem__(self, idx):
         batch_indexes = self.indexes[idx * self.batch_size : (idx + 1) * self.batch_size]
-        
-        X = []
-        y = []
+        X, y = [], []
 
         for index in batch_indexes:
             img_B = cv2.imread(os.path.join(self.folder_B, self.image_files[index]))
@@ -69,26 +68,48 @@ class DataGenerator(Sequence):
         if self.shuffle:
             np.random.shuffle(self.indexes)
 
-def create_unet(input_shape=(256,256,6)):
+def create_siamese_resnet_unet(input_shape=(256,256,6)):
     inputs = Input(input_shape)
 
-    conv1 = Conv2D(64, 3, activation='relu', padding='same')(inputs)
-    pool1 = MaxPooling2D(2)(conv1)
+    img_B = inputs[:, :, :, :3]
+    img_A = inputs[:, :, :, 3:]
 
-    conv2 = Conv2D(128, 3, activation='relu', padding='same')(pool1)
-    pool2 = MaxPooling2D(2)(conv2)
+    resnet = ResNet50(weights='imagenet', include_top=False, input_tensor=Input(shape=(256, 256, 3)))
 
-    bottleneck = Conv2D(256, 3, activation='relu', padding='same')(pool2)
+    resnet.trainable = False
 
-    up1 = UpSampling2D(2)(bottleneck)
-    concat1 = concatenate([conv2, up1])
-    conv3 = Conv2D(128, 3, activation='relu', padding='same')(concat1)
+    layer_names = [
+        'conv1_relu',
+        'conv2_block3_out',
+        'conv3_block4_out',
+        'conv4_block6_out'
+    ]
+    extractor_outputs = [resnet.get_layer(name).output for name in layer_names]
+    extractor = Model(inputs=resnet.input, outputs=extractor_outputs)
 
-    up2 = UpSampling2D(2)(conv3)
-    concat2 = concatenate([conv1, up2])
-    conv4 = Conv2D(64, 3, activation='relu', padding='same')(concat2)
+    feats_B = extractor(img_B)
+    feats_A = extractor(img_A)
 
-    outputs = Conv2D(1, 1, activation='sigmoid')(conv4)
+    x = concatenate([feats_B[3], feats_A[3]])
+    x = Conv2D(512, 3, activation='relu', padding='same')(x)
+
+    x = UpSampling2D(2)(x)
+    x = concatenate([x, feats_B[2], feats_A[2]])
+    x = Conv2D(256, 3, activation='relu', padding='same')(x)
+
+    x = UpSampling2D(2)(x)
+    x = concatenate([x, feats_B[1], feats_A[1]])
+    x = Conv2D(128, 3, activation='relu', padding='same')(x)
+
+    x = UpSampling2D(2)(x)
+    x = concatenate([x, feats_B[0], feats_A[0]])
+    x = Conv2D(64, 3, activation='relu', padding='same')(x)
+
+    x = UpSampling2D(2)(x)
+    x = concatenate([x, img_B, img_A])
+    x = Conv2D(32, 3, activation='relu', padding='same')(x)
+
+    outputs = Conv2D(1, 1, activation='sigmoid')(x)
 
     model = Model(inputs=inputs, outputs=outputs)
     model.compile(optimizer='adam', loss=combined_loss, metrics=['accuracy'])
@@ -107,10 +128,8 @@ def test_with_own_images(path_img1, path_img2, model, img_size=(256,256)):
     pred_mask = model.predict(input_img)[0, :, :, 0]
     binary_mask = (pred_mask > 0.3).astype(np.uint8) * 255
 
-    kernel = np.ones((5,5), np.uint8)
-    
+    kernel = np.ones((5,5), np.uint8) 
     cleaned_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_OPEN, kernel)
-
     cleaned_mask = cv2.morphologyEx(cleaned_mask, cv2.MORPH_CLOSE, kernel)
 
     save_path = "predicted_change_cleaned.png"
@@ -118,7 +137,6 @@ def test_with_own_images(path_img1, path_img2, model, img_size=(256,256)):
     print(f"\n[+] SUCCESS: Cleaned change mask saved locally as '{save_path}'")
 
     plt.figure(figsize=(15,5))
-    
     plt.subplot(1,4,1)
     plt.title("Before Image")
     plt.imshow(cv2.cvtColor((img1_resized * 255).astype(np.uint8), cv2.COLOR_BGR2RGB))
@@ -146,7 +164,8 @@ if __name__ == "__main__":
     train_folder = "dataset/train"
     val_folder = "dataset/val"
     test_folder = "dataset/test"
-    model_path = "best_model.h5"
+
+    model_path = "best_model_resnet50.h5" 
 
     print("Checking for pre-trained model...")
     if os.path.exists(model_path):
@@ -169,7 +188,7 @@ if __name__ == "__main__":
         train_data = DataGenerator(train_folder, batch_size=8, transform=train_transform)
         val_data = DataGenerator(val_folder, batch_size=8, transform=val_transform, shuffle=False)
 
-        model = create_unet()
+        model = create_siamese_resnet_unet()
 
         callbacks = [
             ModelCheckpoint(model_path, monitor="val_loss", save_best_only=True, mode="min", verbose=1),
